@@ -5,9 +5,9 @@
   "type": "module",
   "main": "api/index.ts",
   "scripts": {
-    "dev": "tsx watch api/index.ts",
-    "build": "tsc",
-    "start": "node dist/api/index.js"
+    "dev": "node init && tsx watch api/index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/api/index.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
