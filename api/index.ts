@@ -1,6 +1,14 @@
 import dns from "dns";
-dns.setDefaultResultOrder("ipv4first");
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
+
+// Optional: some serverless environments have trouble resolving mongodb+srv
+// SRV records. If this ever causes DNS issues for you, remove these two
+// lines and use a non-SRV connection string instead (see README).
+try {
+  dns.setDefaultResultOrder("ipv4first");
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+} catch (e) {
+  console.error("DNS config skipped:", e);
+}
 
 import express, { Request, Response, NextFunction } from "express";
 import mongoose, { Schema, Document, Model } from "mongoose";
@@ -15,14 +23,31 @@ const MONGODB_URI = process.env.MONGODB_URI || "";
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_this";
 
 /* ------------------------------------------------------------------ */
+/* SAFETY NETS - prevent the whole function from crashing silently     */
+/* ------------------------------------------------------------------ */
+// If Mongoose's connection ever emits an "error" event with no listener,
+// Node treats it as an uncaught exception and kills the process. That is
+// the #1 cause of "500 + missing CORS header" on Vercel. This listener
+// stops that from happening.
+mongoose.connection.on("error", (err) => {
+  console.error("Mongoose connection error event:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+
+/* ------------------------------------------------------------------ */
 /* 1. DATABASE CONNECTION (cached for serverless cold starts)         */
 /* ------------------------------------------------------------------ */
 
 let isConnected = false;
 
 async function connectDB(): Promise<void> {
-  if (isConnected) {
-    console.log("Using existing database connection");
+  if (isConnected && mongoose.connection.readyState === 1) {
     return;
   }
   if (!MONGODB_URI) {
@@ -31,12 +56,13 @@ async function connectDB(): Promise<void> {
 
   try {
     await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 8000,
       socketTimeoutMS: 45000,
     });
     isConnected = true;
     console.log("MongoDB connected successfully");
   } catch (error) {
+    isConnected = false;
     console.error("MongoDB connection error:", error);
     throw error;
   }
@@ -327,7 +353,21 @@ function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
 
 const app = express();
 
-// Configure CORS for production
+// --- Manual CORS headers, set FIRST, on every single request/response ---
+// This runs before anything else (including DB connection), so even if a
+// later step fails or throws, the browser still receives CORS headers
+// instead of a bare, header-less error.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// Also keep the cors package as a second layer (harmless, redundant safety)
 app.use(
   cors({
     origin: "*",
@@ -350,10 +390,16 @@ app.get("/", (req: Request, res: Response) => {
   });
 });
 
+app.get("/api/health", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    dbConnected: mongoose.connection.readyState === 1,
+  });
+});
+
 // Database connection middleware (only for routes that need DB)
 app.use(async (req: Request, res: Response, next: NextFunction) => {
-  // Skip DB connection for health check
-  if (req.path === "/api/health") {
+  if (req.path === "/api/health" || req.path === "/") {
     return next();
   }
 
@@ -362,6 +408,9 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
     next();
   } catch (err: any) {
     console.error("Database connection failed:", err);
+    // CORS headers were already set above, so this error response
+    // still reaches the browser with proper headers instead of
+    // looking like a CORS failure.
     res.status(500).json({
       message: "Database connection failed",
       error: err.message,
@@ -384,7 +433,8 @@ app.use((req: Request, res: Response) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// Error handling middleware
+// Error handling middleware (also gets CORS headers since they were set
+// at the very top of the middleware chain, before this)
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error("Error:", err);
   res.status(500).json({
@@ -397,14 +447,13 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 /* 7. EXPORT FOR VERCEL                                               */
 /* ------------------------------------------------------------------ */
 
-// Export the app for Vercel serverless deployment
 export default app;
 
 // For local development
 if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
-    console.log(`🚀 Server running locally on http://localhost:${PORT}`);
-    console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`Server running locally on http://localhost:${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/api/health`);
   });
 }
