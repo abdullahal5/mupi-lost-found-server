@@ -62,10 +62,11 @@ interface IPost extends Document {
   title: string;
   description: string;
   location: string;
+  image: string | null; // New field for image URL
   author: string;
   authorId: mongoose.Types.ObjectId;
   reactions: number;
-  likedBy: string[]; // userIds who liked
+  likedBy: string[];
   comments: IComment[];
   createdAt: Date;
 }
@@ -84,6 +85,7 @@ const postSchema = new Schema<IPost>({
   title: { type: String, required: true },
   description: { type: String, required: true },
   location: { type: String, default: "Not specified" },
+  image: { type: String, default: null }, // Image URL field
   author: { type: String, required: true },
   authorId: { type: Schema.Types.ObjectId, ref: "User", required: true },
   reactions: { type: Number, default: 0 },
@@ -145,6 +147,7 @@ const PostService = {
     title: string;
     description: string;
     location: string;
+    image: string | null;
     authorId: string;
     author: string;
   }) {
@@ -221,7 +224,7 @@ const PostController = {
 
   async createPost(req: AuthRequest, res: Response) {
     try {
-      const { type, title, description, location } = req.body;
+      const { type, title, description, location, image } = req.body;
       if (!type || !title || !description) {
         return res.status(400).json({ message: "Missing required fields" });
       }
@@ -229,7 +232,8 @@ const PostController = {
         type,
         title,
         description,
-        location,
+        location: location || "Not specified",
+        image: image || null,
         authorId: req.userId!,
         author: req.userName!,
       });
