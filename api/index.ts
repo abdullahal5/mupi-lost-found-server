@@ -21,13 +21,25 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_this";
 let isConnected = false;
 
 async function connectDB(): Promise<void> {
-  if (isConnected) return;
+  if (isConnected) {
+    console.log("Using existing database connection");
+    return;
+  }
   if (!MONGODB_URI) {
     throw new Error("MONGODB_URI is not set in environment variables");
   }
-  await mongoose.connect(MONGODB_URI);
-  isConnected = true;
-  console.log("MongoDB connected");
+
+  try {
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
+    isConnected = true;
+    console.log("MongoDB connected successfully");
+  } catch (error) {
+    console.error("MongoDB connection error:", error);
+    throw error;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -62,7 +74,7 @@ interface IPost extends Document {
   title: string;
   description: string;
   location: string;
-  image: string | null; // New field for image URL
+  image: string | null;
   author: string;
   authorId: mongoose.Types.ObjectId;
   reactions: number;
@@ -80,18 +92,30 @@ const commentSchema = new Schema<IComment>(
   { _id: true },
 );
 
-const postSchema = new Schema<IPost>({
-  type: { type: String, enum: ["Lost", "Found"], required: true },
-  title: { type: String, required: true },
-  description: { type: String, required: true },
-  location: { type: String, default: "Not specified" },
-  image: { type: String, default: null }, // Image URL field
-  author: { type: String, required: true },
-  authorId: { type: Schema.Types.ObjectId, ref: "User", required: true },
-  reactions: { type: Number, default: 0 },
-  likedBy: { type: [String], default: [] },
-  comments: { type: [commentSchema], default: [] },
-  createdAt: { type: Date, default: Date.now },
+const postSchema = new Schema<IPost>(
+  {
+    type: { type: String, enum: ["Lost", "Found"], required: true },
+    title: { type: String, required: true },
+    description: { type: String, required: true },
+    location: { type: String, default: "Not specified" },
+    image: { type: String, default: null },
+    author: { type: String, required: true },
+    authorId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    reactions: { type: Number, default: 0 },
+    likedBy: { type: [String], default: [] },
+    comments: { type: [commentSchema], default: [] },
+    createdAt: { type: Date, default: Date.now },
+  },
+  {
+    // Ensure virtuals are included in JSON output
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  },
+);
+
+// Add virtual id field for frontend compatibility
+postSchema.virtual("id").get(function () {
+  return this._id.toString();
 });
 
 const Post: Model<IPost> =
@@ -184,6 +208,11 @@ const PostService = {
 /* 4. CONTROLLERS (request / response handling)                       */
 /* ------------------------------------------------------------------ */
 
+interface AuthRequest extends Request {
+  userId?: string;
+  userName?: string;
+}
+
 const AuthController = {
   async signup(req: Request, res: Response) {
     try {
@@ -255,8 +284,9 @@ const PostController = {
   async addComment(req: AuthRequest, res: Response) {
     try {
       const { text } = req.body;
-      if (!text)
+      if (!text) {
         return res.status(400).json({ message: "Comment text is required" });
+      }
 
       const post = await PostService.addComment(
         req.params.id,
@@ -273,11 +303,6 @@ const PostController = {
 /* ------------------------------------------------------------------ */
 /* 5. MIDDLEWARE                                                      */
 /* ------------------------------------------------------------------ */
-
-interface AuthRequest extends Request {
-  userId?: string;
-  userName?: string;
-}
 
 function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
@@ -304,25 +329,47 @@ function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// Configure CORS for production
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "https://mupi-lost-and-found.vercel.app",
+      "https://mupi-lost-found-client.vercel.app", // Add your frontend URL
+    ],
+    credentials: true,
+  }),
+);
 
-// Ensure DB connection before handling any request (important for serverless)
+app.use(express.json({ limit: "10mb" }));
+
+// Health check endpoint (no DB connection required)
+app.get("/api/health", (req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    message: "Lost & Found API is running",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Database connection middleware (only for routes that need DB)
 app.use(async (req: Request, res: Response, next: NextFunction) => {
+  // Skip DB connection for health check
+  if (req.path === "/api/health") {
+    return next();
+  }
+
   try {
     await connectDB();
     next();
   } catch (err: any) {
-    res
-      .status(500)
-      .json({ message: "Database connection failed", error: err.message });
+    console.error("Database connection failed:", err);
+    res.status(500).json({
+      message: "Database connection failed",
+      error: err.message,
+    });
   }
-});
-
-app.get("/api/health", (req: Request, res: Response) => {
-  res
-    .status(200)
-    .json({ status: "ok", message: "Lost & Found API is running" });
 });
 
 // Auth routes
@@ -331,32 +378,36 @@ app.post("/api/auth/login", AuthController.login);
 
 // Post routes
 app.get("/api/posts", PostController.getAllPosts);
-app.post("/api/posts", authMiddleware, PostController.createPost as any);
-app.post(
-  "/api/posts/:id/like",
-  authMiddleware,
-  PostController.toggleLike as any,
-);
-app.post(
-  "/api/posts/:id/comments",
-  authMiddleware,
-  PostController.addComment as any,
-);
+app.post("/api/posts", authMiddleware, PostController.createPost);
+app.post("/api/posts/:id/like", authMiddleware, PostController.toggleLike);
+app.post("/api/posts/:id/comments", authMiddleware, PostController.addComment);
 
 // Fallback 404
 app.use((req: Request, res: Response) => {
   res.status(404).json({ message: "Route not found" });
 });
 
+// Error handling middleware
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error("Error:", err);
+  res.status(500).json({
+    message: "Internal server error",
+    error: process.env.NODE_ENV === "development" ? err.message : undefined,
+  });
+});
+
 /* ------------------------------------------------------------------ */
-/* 7. LOCAL DEV SERVER + VERCEL EXPORT                                 */
+/* 7. EXPORT FOR VERCEL                                               */
 /* ------------------------------------------------------------------ */
 
-if (!process.env.VERCEL) {
+// Export the app for Vercel serverless deployment
+export default app;
+
+// For local development
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
-    console.log(`Server running locally on http://localhost:${PORT}`);
+    console.log(`🚀 Server running locally on http://localhost:${PORT}`);
+    console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
   });
 }
-
-export default app;
