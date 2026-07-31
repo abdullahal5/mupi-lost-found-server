@@ -330,15 +330,7 @@ const app = express();
 // Configure CORS for production
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "http://localhost:5000",
-      "https://mupi-lost-and-found.vercel.app",
-      "https://mupi-lost-found-client.vercel.app",
-      "https://lost-and-found-client-mupi.vercel.app",
-    ],
-    credentials: true,
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   }),
@@ -346,12 +338,15 @@ app.use(
 
 app.use(express.json({ limit: "10mb" }));
 
-// Health check endpoint (no DB connection required)
-app.get("/api/health", (req: Request, res: Response) => {
+app.get("/", (req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
     message: "Lost & Found API is running",
-    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: "/api/health",
+      posts: "/api/posts",
+      auth: "/api/auth",
+    },
   });
 });
 
