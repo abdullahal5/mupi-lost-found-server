@@ -107,13 +107,11 @@ const postSchema = new Schema<IPost>(
     createdAt: { type: Date, default: Date.now },
   },
   {
-    // Ensure virtuals are included in JSON output
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   },
 );
 
-// Add virtual id field for frontend compatibility
 postSchema.virtual("id").get(function () {
   return this._id.toString();
 });
@@ -335,10 +333,14 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://localhost:3000",
+      "http://localhost:5000",
       "https://mupi-lost-and-found.vercel.app",
-      "https://mupi-lost-and-found.vercel.app",
+      "https://mupi-lost-found-client.vercel.app",
+      "https://lost-and-found-client-mupi.vercel.app",
     ],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 
