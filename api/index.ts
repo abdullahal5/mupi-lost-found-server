@@ -1,4 +1,4 @@
-import dns from "dns";
+import dns from "node:dns";
 
 // Optional: some serverless environments have trouble resolving mongodb+srv
 // SRV records. If this ever causes DNS issues for you, remove these two

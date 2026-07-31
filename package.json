@@ -2,6 +2,7 @@
   "name": "lost-and-found-backend",
   "version": "1.0.0",
   "description": "Single-file monolithic Express + TypeScript + MongoDB backend for Lost and Found app, deployable on Vercel",
+  "type": "module",
   "main": "api/index.ts",
   "scripts": {
     "dev": "tsx watch api/index.ts",
@@ -11,7 +12,6 @@
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "dns": "^0.2.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
